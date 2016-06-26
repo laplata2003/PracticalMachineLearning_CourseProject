@@ -8,26 +8,38 @@ output:
         theme: united
 ---
 
+```{r, echo = FALSE}
+# Multicore parallel processing
+suppressMessages(library(doMC))
 
-## Background
-Using devices such as ***Jawbone Up***, ***Nike FuelBand***, and ***Fitbit*** it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
-
-In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r, echo=FALSE}
-summary(cars)
+registerDoMC(cores = 4)
 ```
 
+## 1) Introducction
 
-Load the training data into a data table.
+Using devices such as ***Jawbone Up***, ***Nike FuelBand***, and ***Fitbit*** it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
 
+A group of 6 participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways, and a dataset (training set) was obtained from accelerometers on the belt, forearm, arm, and dumbell of these group. For further information, see: <http://groupware.les.inf.puc-rio.br/har> (specifically the section on the ***Weight Lifting Exercise Dataset***). 
+
+The goal of this project is to predict the manner in which the given group did the exercise, represented by a variable named ***"classe"***, defined in the training set. In order to reach this goal, any of the other variables can be used to predict with. 
+
+## 2) Datasets
+
+The training and testing datasets to be used in this project are available in the following URLs:
+
+* Training <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+* Testing <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+Such datasets come from this source: <http://groupware.les.inf.puc-rio.br/har>. Reference:
+
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. ***Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements***. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.
+
+## 3) Data loading and processing
+
+### 3.1) Data loading
+
+Firstly, loading of the datasets from the provided URLs is done:
 ```{r}
-set.seed(170597)
-
 trainingDataUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
 testingDataUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv" 
 
@@ -35,10 +47,99 @@ trainingData <- read.csv(url(trainingDataUrl))
 testingData <- read.csv(url(testingDataUrl))
 ```
 
-You can also embed plots, for example:
+The training dataset consists of ***`r dim(trainingData)[1]`*** observations and ***`r dim(trainingData)[2]`*** variables, while the testing dataset has ***`r dim(testingData)[1]`*** observations and ***`r dim(testingData)[2]`*** variables. As it was mentioned before, the prediction is based on the ***classe*** variable.
 
-```{r, echo=FALSE}
-plot(cars)
+Due to the fact that the testing dataset has to be used in the ***Course Project Prediction Quiz***, new training and testing datasets will be generated 
+from partitioning the original training dataset. In this case, a partitioning of 60% for training and 40% for testing is considered:
+```{r}
+suppressMessages(library(caret))
+
+set.seed(1705)
+inTrain  <- createDataPartition(trainingData$classe, p = 0.6, list = FALSE)
+training <- trainingData[inTrain,]
+testing  <- trainingData[-inTrain,]
+```
+Now, the new datasets are composed of ***`r dim(training)[1]`*** (training) and ***`r dim(testing)[1]`*** (testing) observations respectively, with the original number of variables (***`r dim(trainingData)[2]`***).
+
+### 3.2) Data processing
+
+First of all, a certain data processing is needed. The first step is removing meaningless variables for modelling, that is to say, variables that are not related with accelerometer measurements, such as ***X*** (sequence number), ***user_name*** (participant's name) or ***cvtd_timestamp***/***raw_timestamp_part_1***/***raw_timestamp_part_2*** (times).
+```{r}
+meaninglessVariables <- c('X', 'user_name', 'cvtd_timestamp', 'raw_timestamp_part_1', 'raw_timestamp_part_2')
+training <- training[, setdiff(names(training), meaninglessVariables)]
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+Next, Near Zero Variance (NZV) variables and variables with many NAs (considering a threshold of 80%) are removed as well:  
+```{r}
+nearZeroVarianceVariables <- nearZeroVar(training, saveMetrics = TRUE)
+nearZeroVarianceVariableNames <- rownames(nearZeroVarianceVariables[nearZeroVarianceVariables$nzv == TRUE,])
+training <- training[, setdiff(names(training), nearZeroVarianceVariableNames)]
+
+observationsNo <- nrow(training)
+variablesWithManyNAs <- sapply(training, function(variable) {
+  (sum(is.na(variable)) / observationsNo >= 0.8)
+})
+
+training <- training[, !variablesWithManyNAs]
+```
+Finally, the resulting number of potential predictors is reduced to: ***`r dim(training)[2]`***.
+
+## 3) Modeling
+
+In order to get the best model to be applied in the prediction for the ***Course Project Prediction Quiz***, the ***Random Forest*** and ***Boosting*** methods are compared. The best of them (with higher level of accuracy when testing dataset is applied on) will be used for the quiz.
+
+In this project k-fold cross validation will be used, with k = 10 (see [*Cross-validation*][1]).
+```{r}
+suppressMessages(library(randomForest))
+suppressMessages(library(gbm))
+library(plyr)
+
+customTrainControl <- trainControl(method = "cv", number = 10)
+```
+
+### 3.1) Random Forest
+
+Fitting the model:
+```{r}
+randomForestModel <- train(classe ~ ., data = training, method = "rf", trControl = customTrainControl)
+randomForestModel$finalModel
+```
+
+Predicting on the testing dataset:
+```{r}
+randomForestPredict <- predict(randomForestModel, newdata = testing)
+randomForestConfMatrix <- confusionMatrix(randomForestPredict, testing$classe)
+randomForestConfMatrix
+```
+
+Finally, this method reaches an accuracy of ***`r randomForestConfMatrix$overall['Accuracy']`***.
+
+### 3.2) Boosting
+
+Fitting the model:
+```{r}
+gbmModel <- train(classe ~ ., data = training, method = "gbm", trControl = customTrainControl, verbose = FALSE)
+gbmModel$finalModel
+```
+
+Predicting on the testing dataset:
+```{r}
+gbmPredict <- predict(gbmModel, newdata = testing)
+gbmConfMatrix <- confusionMatrix(gbmPredict, testing$classe)
+gbmConfMatrix
+```
+
+As a result, this method gets an accuracy of ***`r gbmConfMatrix$overall['Accuracy']`***.
+
+### 3.3) Model selection
+
+As seen before, both methods, using cross-validation, produce really precise model. However, there is an slight advantage in the accuracy of ***Random Forest*** (***`r randomForestConfMatrix$overall['Accuracy']`***) over ***Boosting*** (***`r gbmConfMatrix$overall['Accuracy']`***) in this project. Because of that, ***Random Forest*** model is chosen for predicting the quiz results.
+
+### 4) Prediction of Quiz results
+As mentioned before, in order to predict de quiz results, the testing dataset provided initially (***pml-testing.csv***) has to be applied on the model (***Random Forest***), as shown below:
+```{r}
+predict(randomForestModel, newdata = testingData)
+```
+
+
+[1]: https://en.wikipedia.org/wiki/Cross-validation_(statistics)#cite_note-McLachlan-7
